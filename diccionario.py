@@ -35,7 +35,10 @@ def generar_resultado():
 # Función para realizar un escaneo ARP
 def escanear_arp():
     try:
-        resultado_arp = subprocess.check_output(['sudo', 'arp-scan', '--localnet']).decode('utf-8')
+        # Obtener la contraseña del Entry
+        contrasena = contrasena_entry.get()
+        comando = f'sudo -S arp-scan --localnet'
+        resultado_arp = subprocess.check_output(comando, shell=True, input=f'{contrasena}\n'.encode()).decode('utf-8')
         resultado_label.config(text=f'Resultado ARP Scan:\n{resultado_arp}')
     except subprocess.CalledProcessError as e:
         resultado_label.config(text=f'Error al ejecutar arp-scan: {e}')
@@ -76,6 +79,10 @@ agregar_button.pack()
 
 generar_button = tk.Button(ventana, text="Generar Resultado", command=generar_resultado)
 generar_button.pack()
+
+# Entry para ingresar la contraseña de sudo
+contrasena_entry = tk.Entry(ventana, show="*")
+contrasena_entry.pack()
 
 escanear_arp_button = tk.Button(ventana, text="Escanear ARP", command=escanear_arp)
 escanear_arp_button.pack()
