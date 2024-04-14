@@ -1,6 +1,5 @@
 # Programa-Combinado-F3nix
-![Captura de pantalla_2024-04-14_20-05-09](https://github.com/f3nixhack/Programa-Combinado-F3nix/assets/50671074/163da045-43bd-4841-9854-41acfad1a265)
-
+![Captura de pantalla_2024-04-14_20-07-07](https://github.com/f3nixhack/Programa-Combinado-F3nix/assets/50671074/0aadd104-68e7-4931-8685-9fcb4b204789)
 
 Este programa es una aplicación de escritorio construida con la biblioteca Tkinter en Python. Su objetivo es ofrecer una serie de funciones combinadas que incluyen:
 
