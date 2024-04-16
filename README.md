@@ -1,5 +1,6 @@
 # Programa-Combinado-F3nix
 Probado en linux
+
 ![Captura de pantalla_2024-04-14_20-07-07](https://github.com/f3nixhack/Programa-Combinado-F3nix/assets/50671074/0aadd104-68e7-4931-8685-9fcb4b204789)
 
 Este código es un programa de interfaz gráfica de usuario (GUI) en Python utilizando la biblioteca `tkinter`. Te explicaré cada parte del código:
