@@ -3,227 +3,576 @@ import subprocess
 import speedtest
 import requests
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from PIL import Image
+from tkinter import ttk, filedialog, messagebox, simpledialog
+from PIL import Image, ImageTk
 from PIL.ExifTags import TAGS, GPSTAGS
 import webbrowser
+import threading
+import os
+import shutil
+import base64
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.backends import default_backend
 
-# Función para procesar un archivo
+# --- UI Configuration (tema oscuro estilo main.py) ---
+BG_COLOR = "#0b0b0b"
+FG_COLOR = "#E6F2FF"
+ACCENT_COLOR = "#99E6FF"
+BUTTON_COLOR = "#222222"
+BUTTON_HOVER_COLOR = "#3a3a3a"
+BUTTON_ACTIVE_COLOR = "#555555"
+BUTTON_BORDER = "#333333"
+# Red tones for destructive actions (oscuro)
+RED_ACCENT = "#E53935"
+BUTTON_ALERT_COLOR = "#7a1f1f"
+BUTTON_ALERT_ACTIVE = "#a03333"
+BUTTON_BORDER_ALERT = "#5b0f0f"
+FONT_FAMILY = "Helvetica"
+FONT_SIZE_NORMAL = 10
+FONT_SIZE_LARGE = 13
+
+# --- Core Functions ---
+
+# Variable global para el widget de texto de resultados
+resultado_text = None
+
 def procesar_archivo(archivo):
     palabras = set()
-    with open(archivo, 'r', encoding='utf-8', errors='ignore') as file:
-        for line in file:
-            palabras.update(line.split())
+    try:
+        with open(archivo, 'r', encoding='utf-8', errors='ignore') as file:
+            for line in file:
+                palabras.update(line.split())
+    except Exception as e:
+        messagebox.showerror("Error de Archivo", f"No se pudo leer el archivo {archivo}:\n{e}")
     return palabras
 
-# Función para agregar archivos
+
+def escribir_resultado(texto):
+    """Escribir en el área de resultados desplazable."""
+    global resultado_text
+    if resultado_text is not None:
+        try:
+            resultado_text.config(state='normal')
+            resultado_text.delete('1.0', tk.END)
+            resultado_text.insert(tk.END, texto)
+            resultado_text.config(state='disabled')
+        except Exception:
+            pass
+
+
 def agregar_archivo():
-    archivo = filedialog.askopenfilename(filetypes=[("Archivos de texto", "*.txt")])
+    archivo = filedialog.askopenfilename(filetypes=[("Archivos de texto", "*.txt"), ("Imágenes", "*.jpg *.jpeg *.png *.tiff"), ("Todos", "*")])
     if archivo:
         archivos_seleccionados.append(archivo)
-        archivos_seleccionados_label.config(text="Archivos seleccionados:\n" + "\n".join(archivos_seleccionados))
+        update_selected_files_label()
 
-# Función para generar el resultado
 def generar_resultado():
+    if not archivos_seleccionados:
+        messagebox.showwarning("Sin Archivos", "Por favor, agregue al menos un archivo de texto.")
+        return
+
     palabras_unicas = set()
     for archivo in archivos_seleccionados:
         palabras_unicas.update(procesar_archivo(archivo))
-    
-    resultado = 'resultado.txt'
-    with open(resultado, 'w') as file:
-        file.write('\n'.join(palabras_unicas))
 
-    resultado_label.config(text=f'Se han creado {len(palabras_unicas)} palabras únicas en {resultado}')
-
-# Función para realizar un escaneo ARP
-def escanear_arp():
+    resultado_path = 'resultado.txt'
     try:
-        # Obtener la contraseña del Entry
-        contrasena = contrasena_entry.get()
-        comando = f'sudo -S arp-scan --localnet'
-        resultado_arp = subprocess.check_output(comando, shell=True, input=f'{contrasena}\n'.encode()).decode('utf-8')
-        resultado_label.config(text=f'Resultado ARP Scan:\n{resultado_arp}')
-    except subprocess.CalledProcessError as e:
-        resultado_label.config(text=f'Error al ejecutar arp-scan: {e}')
+        with open(resultado_path, 'w', encoding='utf-8') as file:
+            file.write('\n'.join(sorted(list(palabras_unicas))))
+        escribir_resultado(f'Se han guardado {len(palabras_unicas)} palabras únicas en {resultado_path}')
+    except Exception as e:
+        messagebox.showerror("Error al Guardar", f"No se pudo guardar el archivo de resultado:\n{e}")
 
-# Función para medir la velocidad de internet
+def escanear_arp():
+    contrasena = contrasena_entry.get()
+    if not contrasena:
+        messagebox.showwarning("Contraseña Requerida", "Por favor, ingrese la contraseña de sudo.")
+        return
+    try:
+        comando = 'sudo -S arp-scan --localnet'
+        proceso = subprocess.Popen(comando.split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        resultado_arp, error = proceso.communicate(input=f'{contrasena}\n')
+        if proceso.returncode == 0:
+            escribir_resultado(f'Resultado de ARP Scan:\n{resultado_arp}')
+        else:
+            messagebox.showerror("Error de ARP Scan", f"Error al ejecutar arp-scan: {error}")
+    except FileNotFoundError:
+        messagebox.showerror("Comando no Encontrado", "El comando 'arp-scan' no se encontró. ¿Está instalado?")
+    except Exception as e:
+        messagebox.showerror("Error Inesperado", f"Ocurrió un error: {e}")
+
 def medir_velocidad():
-    st = speedtest.Speedtest()
-    descarga = st.download() / 1024 / 1024
-    subida = st.upload() / 1024 / 1024
-    ping = st.results.ping
-    resultado_label.config(text=f'Velocidad de Descarga: {descarga:.2f} Mbps\nVelocidad de Subida: {subida:.2f} Mbps\nPing: {ping} ms')
+    
+    def medir_velocidad_thread():
+        try:
+            st = speedtest.Speedtest()
+            st.get_best_server()
+            st.download()
+            st.upload()
+            results_dict = st.results.dict()
 
-# Función para obtener la dirección IP y abrir Google Maps
+            descarga = results_dict['download'] / 1_000_000
+            subida = results_dict['upload'] / 1_000_000
+            ping = results_dict['ping']
+            server_name = results_dict['server']['name']
+            server_country = results_dict['server']['country']
+            sponsor = results_dict['server']['sponsor']
+            client_ip = results_dict['client']['ip']
+            isp = results_dict['client']['isp']
+            
+            result_string = (
+                f"Resultados del Test de Velocidad:\n\n"
+                f"Descarga: {descarga:.2f} Mbps\n"
+                f"Subida: {subida:.2f} Mbps\n"
+                f"Ping: {ping:.2f} ms\n\n"
+                f"--- Detalles del Servidor ---\n"
+                f"Servidor: {server_name}, {server_country}\n"
+                f"Patrocinador: {sponsor}\n\n"
+                f"--- Detalles del Cliente ---\n"
+                f"IP: {client_ip}\n"
+                f"ISP: {isp}"
+            )
+            
+            def update_ui():
+                escribir_resultado(result_string)
+                progress_bar.stop()
+                progress_bar.pack_forget()
+
+            ventana.after(0, update_ui)
+
+        except Exception as e:
+            def update_ui_error():
+                messagebox.showerror("Error de Speedtest", f"No se pudo medir la velocidad: {e}")
+                progress_bar.stop()
+                progress_bar.pack_forget()
+            
+            ventana.after(0, update_ui_error)
+
+    escribir_resultado("Midiendo velocidad de Internet... Por favor, espere.")
+    progress_bar.pack(fill="x", pady=5, expand=True)
+    progress_bar.start()
+    ventana.update_idletasks()
+    
+    thread = threading.Thread(target=medir_velocidad_thread)
+    thread.start()
+
+
 def obtener_ip_y_abrir_mapa():
     try:
-        ip = requests.get('https://ipinfo.io').text
-        resultado_label.config(text=f'Dirección IP: {ip}')
-        
-        if ip:
-            ip_info = requests.get(f'https://ipinfo.io/{ip}/json').json()
-            if 'loc' in ip_info:
-                lat, lon = ip_info['loc'].split(',')
-                maps_url = f'https://www.google.com/maps/place/{lat},{lon}'
-                subprocess.Popen(['xdg-open', maps_url])
-    except requests.RequestException:
-        resultado_label.config(text='Error al obtener la dirección IP.')
+        escribir_resultado("Obteniendo información de IP...")
+        ventana.update_idletasks()
+        response = requests.get('https://ipinfo.io/json')
+        response.raise_for_status()
+        ip_info = response.json()
+        ip = ip_info.get('ip', 'No disponible')
+        loc = ip_info.get('loc', '')
+        escribir_resultado(f'Tu IP pública es: {ip}')
+        if loc:
+            lat, lon = loc.split(',')
+            maps_url = f'https://www.google.com/maps/place/{lat},{lon}'
+            webbrowser.open(maps_url)
+    except requests.RequestException as e:
+        messagebox.showerror("Error de Red", f"No se pudo obtener la información de IP: {e}")
 
-# Función para borrar metadatos de un archivo
-def borrar_metadatos(archivo):
+def elegir_y_borrar_metadatos():
+    archivo = filedialog.askopenfilename(title="Seleccione un archivo para borrar sus metadatos")
+    if not archivo:
+        return
     try:
-        subprocess.run(["exiftool", "-all=", archivo])
-        resultado_label.config(text=f'Se han borrado los metadatos de {archivo}')
+        # Usamos exiftool para borrar todos los metadatos
+        comando = ["exiftool", "-all=", "-overwrite_original", archivo]
+        resultado = subprocess.run(comando, check=True, capture_output=True, text=True)
+        messagebox.showinfo("Éxito", f"Metadatos borrados exitosamente de:\n{archivo}")
     except FileNotFoundError:
-        resultado_label.config(text='ExifTool no está instalado. Por favor, instálelo para utilizar esta función.')
+        messagebox.showerror("ExifTool no Encontrado", "ExifTool no está instalado. Por favor, instálelo para usar esta función.")
+    except subprocess.CalledProcessError as e:
+        messagebox.showerror("Error de ExifTool", f"ExifTool falló con el siguiente error:\n{e.stderr}")
+    except Exception as e:
+        messagebox.showerror("Error Inesperado", f"Ocurrió un error: {e}")
 
-# Función para elegir archivo para borrar metadatos
-def elegir_archivo_borrar_metadatos():
-    archivo = filedialog.askopenfilename(filetypes=[("Todos los archivos", "*.*")])
-    if archivo:
-        borrar_metadatos_button.config(state="normal")
-        archivos_seleccionados.append(archivo)
-        archivos_seleccionados_label.config(text="Archivo seleccionado para borrar metadatos:\n" + archivo)
+def _derive_key(password: bytes, salt: bytes) -> bytes:
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+        backend=default_backend()
+    )
+    return base64.urlsafe_b64encode(kdf.derive(password))
 
-# Función para cifrar una carpeta
 def encrypt_folder():
-    folder_path = filedialog.askdirectory()
-    if folder_path:
-        subprocess.run(["tar", "czf", "-", folder_path], stdout=subprocess.PIPE)
-        subprocess.run(["gpg", "-c", "-o", folder_path + ".tar.gz.gpg"], stdin=subprocess.PIPE)
+    folder_path = filedialog.askdirectory(title="Seleccione la carpeta para cifrar")
+    if not folder_path:
+        return
 
-# Función para descifrar una carpeta
+    password = simpledialog.askstring("Contraseña", "Ingrese la contraseña para el cifrado:", show='*')
+    if not password:
+        messagebox.showwarning("Cancelado", "Operación de cifrado cancelada.")
+        return
+
+    output_file = filedialog.asksaveasfilename(title="Guardar archivo cifrado como...",defaultextension=".f3nixcrypt", filetypes=[("F3nix Encrypted File", "*.f3nixcrypt")])
+    if not output_file:
+        return
+
+    temp_archive = None
+    try:
+        # 1. Comprimir la carpeta
+        escribir_resultado(f"Comprimiendo {os.path.basename(folder_path)}...")
+        ventana.update_idletasks()
+        temp_archive = shutil.make_archive("temp_archive", 'zip', folder_path)
+
+        # 2. Derivar clave y cifrar
+        escribir_resultado("Cifrando archivo...")
+        ventana.update_idletasks()
+        
+        salt = os.urandom(16)
+        key = _derive_key(password.encode(), salt)
+        f = Fernet(key)
+
+        with open(temp_archive, "rb") as file:
+            file_data = file.read()
+        
+        encrypted_data = f.encrypt(file_data)
+
+        # 3. Guardar archivo cifrado (salt + data)
+        with open(output_file, "wb") as file:
+            file.write(salt)
+            file.write(encrypted_data)
+
+        messagebox.showinfo("Éxito", f"Carpeta cifrada exitosamente en:\n{output_file}")
+
+    except Exception as e:
+        messagebox.showerror("Error de Cifrado", f"Ocurrió un error durante el cifrado: {e}")
+    finally:
+        # 4. Limpiar archivo temporal
+        if temp_archive and os.path.exists(temp_archive):
+            os.remove(temp_archive)
+        escribir_resultado("Operación finalizada.")
+
+
 def decrypt_folder():
-    file_path = filedialog.askopenfilename()
-    if file_path:
-        gpg_process = subprocess.Popen(["gpg", "-d", "-o", file_path[:-7]], stdin=subprocess.PIPE)
-        with open(file_path, "rb") as encrypted_file:
-            gpg_process.communicate(encrypted_file.read())
+    file_path = filedialog.askopenfilename(title="Seleccione el archivo .f3nixcrypt para descifrar", filetypes=[("F3nix Encrypted File", "*.f3nixcrypt")])
+    if not file_path:
+        return
 
-# Función para extraer metadatos EXIF de una imagen
+    password = simpledialog.askstring("Contraseña", "Ingrese la contraseña para el descifrado:", show='*')
+    if not password:
+        messagebox.showwarning("Cancelado", "Operación de descifrado cancelada.")
+        return
+        
+    output_dir = filedialog.askdirectory(title="Seleccione la carpeta de destino para extraer")
+    if not output_dir:
+        return
+
+    temp_archive = None
+    try:
+        # 1. Leer salt y datos cifrados
+        escribir_resultado("Descifrando archivo...")
+        ventana.update_idletasks()
+        with open(file_path, "rb") as file:
+            salt = file.read(16)
+            encrypted_data = file.read()
+
+        # 2. Derivar clave y descifrar
+        key = _derive_key(password.encode(), salt)
+        f = Fernet(key)
+        
+        try:
+            decrypted_data = f.decrypt(encrypted_data)
+        except InvalidToken:
+            messagebox.showerror("Error de Descifrado", "Contraseña incorrecta o archivo corrupto.")
+            return
+
+        # 3. Guardar y extraer el archivo descomprimido
+        escribir_resultado("Extrayendo archivos...")
+        ventana.update_idletasks()
+        temp_archive = "temp_archive_decrypted.zip"
+        with open(temp_archive, "wb") as file:
+            file.write(decrypted_data)
+            
+        shutil.unpack_archive(temp_archive, output_dir)
+
+        messagebox.showinfo("Éxito", f"Archivo descifrado y extraído en:\n{output_dir}")
+
+    except Exception as e:
+        messagebox.showerror("Error de Descifrado", f"Ocurrió un error durante el descifrado: {e}")
+    finally:
+        # 4. Limpiar archivo temporal
+        if temp_archive and os.path.exists(temp_archive):
+            os.remove(temp_archive)
+        escribir_resultado("Operación finalizada.")
+
+
 def get_exif_data(image):
     exif_data = {}
     info = image._getexif()
     if info:
         for tag, value in info.items():
             decoded = TAGS.get(tag, tag)
-            exif_data[decoded] = value
+            if decoded == "GPSInfo":
+                gps_data = {}
+                for t in value:
+                    sub_decoded = GPSTAGS.get(t, t)
+                    gps_data[sub_decoded] = value[t]
+                exif_data[decoded] = gps_data
+            else:
+                exif_data[decoded] = value
     return exif_data
 
-# Función para extraer información GPS de los metadatos EXIF
-def get_gps_info(exif_data):
-    gps_info = {}
-    if "GPSInfo" in exif_data:
-        for key in exif_data["GPSInfo"].keys():
-            decode = GPSTAGS.get(key, key)
-            gps_info[decode] = exif_data["GPSInfo"][key]
-    return gps_info
-
-# Función para convertir grados, minutos y segundos a formato decimal
 def get_decimal_from_dms(dms, ref):
-    degrees = float(dms[0])
-    minutes = float(dms[1])
-    seconds = float(dms[2])
-
-    decimal = degrees + (minutes / 60.0) + (seconds / 3600.0)
+    degrees, minutes, seconds = dms
+    decimal = float(degrees) + float(minutes) / 60 + float(seconds) / 3600
     if ref in ['S', 'W']:
         decimal = -decimal
     return decimal
 
-# Función para obtener las coordenadas de latitud y longitud
-def get_coordinates(gps_info):
-    lat = None
-    lon = None
+def get_coordinates(exif_data):
+    if 'GPSInfo' in exif_data:
+        gps_info = exif_data['GPSInfo']
+        lat_dms = gps_info.get('GPSLatitude')
+        lon_dms = gps_info.get('GPSLongitude')
+        lat_ref = gps_info.get('GPSLatitudeRef')
+        lon_ref = gps_info.get('GPSLongitudeRef')
 
-    if 'GPSLatitude' in gps_info and 'GPSLatitudeRef' in gps_info and 'GPSLongitude' in gps_info and 'GPSLongitudeRef' in gps_info:
-        lat = get_decimal_from_dms(gps_info['GPSLatitude'], gps_info['GPSLatitudeRef'])
-        lon = get_decimal_from_dms(gps_info['GPSLongitude'], gps_info['GPSLongitudeRef'])
+        if lat_dms and lon_dms and lat_ref and lon_ref:
+            lat = get_decimal_from_dms(lat_dms, lat_ref)
+            lon = get_decimal_from_dms(lon_dms, lon_ref)
+            return lat, lon
+    return None, None
 
-    return lat, lon
-
-# Función para abrir Google Maps con las coordenadas especificadas
-def open_google_maps(lat, lon):
-    url = f"https://www.google.com/maps/place/{lat},{lon}"
-    webbrowser.open(url)
-
-# Función para buscar un archivo de imagen y extraer su ubicación GPS
 def buscar_archivo_y_abrir_mapa():
-    archivo = filedialog.askopenfilename(filetypes=[("Todos los archivos", "*.*")])
-    if archivo:
-        try:
-            image = Image.open(archivo)
-            exif_data = get_exif_data(image)
-            gps_info = get_gps_info(exif_data)
-            lat, lon = get_coordinates(gps_info)
-            if lat and lon:
-                open_google_maps(lat, lon)
-            else:
-                messagebox.showinfo("GPS Info", "No GPS información encontrada en la imagen.")
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudo procesar el archivo de imagen.\nError: {e}")
+    archivo = filedialog.askopenfilename(title="Seleccione un archivo de imagen", filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.tiff")])
+    if not archivo:
+        return
+    try:
+        image = Image.open(archivo)
+        exif_data = get_exif_data(image)
+        lat, lon = get_coordinates(exif_data)
+        if lat is not None and lon is not None:
+            maps_url = f"https://www.google.com/maps/place/{lat},{lon}"
+            webbrowser.open(maps_url)
+        else:
+            messagebox.showinfo("Sin GPS", "No se encontró información de GPS en esta imagen.")
+        
+        # Agregar la imagen a la lista de la izquierda para poder abrirla después
+        if archivo not in archivos_seleccionados:
+            archivos_seleccionados.append(archivo)
+            update_selected_files_label()
+            escribir_resultado(f"Imagen agregada a la lista: {os.path.basename(archivo)}")
+    except Exception as e:
+        messagebox.showerror("Error de Imagen", f"No se pudo procesar el archivo: {e}")
 
-# Crear la ventana principal
+# --- UI Setup ---
+
+def update_selected_files_label():
+    # Actualiza el Listbox con los archivos seleccionados (más legible)
+    listbox_selected.delete(0, tk.END)
+    if archivos_seleccionados:
+        for f in archivos_seleccionados:
+            listbox_selected.insert(tk.END, os.path.basename(f))
+    else:
+        listbox_selected.insert(tk.END, "(Ningún archivo seleccionado)")
+
+def on_enter(e):
+    try:
+        e.widget['background'] = BUTTON_HOVER_COLOR
+    except Exception:
+        pass
+
+def on_leave(e):
+    try:
+        e.widget['background'] = BUTTON_COLOR
+    except Exception:
+        pass
+
+
+def on_enter_alert(e):
+    try:
+        e.widget['background'] = BUTTON_ALERT_ACTIVE
+    except Exception:
+        pass
+
+
+def on_leave_alert(e):
+    try:
+        e.widget['background'] = BUTTON_ALERT_COLOR
+    except Exception:
+        pass
+
 ventana = tk.Tk()
-ventana.title("Programa Combinado F3NIX")
+ventana.title("F3NIX Toolkit")
+ventana.configure(bg=BG_COLOR)
+ventana.geometry("900x600") # Tamaño compacto
 
-# Lista para almacenar los archivos seleccionados
+# --- Style Configuration ---
+style = ttk.Style()
+style.theme_use('clam') # A more modern theme
+
+style.configure("TFrame", background=BG_COLOR)
+style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR, font=(FONT_FAMILY, FONT_SIZE_NORMAL))
+style.configure("TButton",
+    background=BUTTON_COLOR,
+    foreground=FG_COLOR,
+    font=(FONT_FAMILY, FONT_SIZE_NORMAL, "bold"),
+    borderwidth=0,
+    relief="flat",
+    padding=10)
+style.map("TButton",
+    background=[('active', BUTTON_HOVER_COLOR), ('pressed', ACCENT_COLOR)],
+    foreground=[('pressed', BUTTON_COLOR), ('active', FG_COLOR)])
+
+# --- Main Frame ---
+main_frame = ttk.Frame(ventana, padding=6)
+main_frame.pack(fill='both', expand=True)
+
+# Título
+frame_top = ttk.Frame(main_frame, padding=(8, 8, 8, 4))
+frame_top.pack(fill='x')
+ttk.Label(frame_top, text='F3NIX TOOLKIT', font=(FONT_FAMILY, 18, 'bold'), foreground=ACCENT_COLOR).pack(anchor='w')
+
+# Grid principal
+grid_frame = ttk.Frame(main_frame)
+grid_frame.pack(expand=True, fill='both')
+grid_frame.columnconfigure(1, weight=1)
+
+# --- Layout: izquierda (lista + acciones principales) y derecha (acciones y resultado) ---
+left = ttk.Frame(grid_frame)
+left.grid(row=0, column=0, sticky='nsw', padx=(0,12), pady=4)
+
+right = ttk.Frame(grid_frame)
+right.grid(row=0, column=1, sticky='nsew')
+grid_frame.columnconfigure(1, weight=1)
+
+# Left: archivos seleccionados y botones principales
+ttk.Label(left, text='Archivos:').pack(anchor='w')
+listbox_frame_left = ttk.Frame(left)
+listbox_frame_left.pack(fill='both', expand=True, pady=(2,6))
+listbox_selected = tk.Listbox(listbox_frame_left, height=6, bg='#111111', fg='#FFFFFF', bd=2, relief='sunken', font=(FONT_FAMILY, 9))
+listbox_selected.pack(side='left', fill='both', expand=True)
+scroll_left = ttk.Scrollbar(listbox_frame_left, orient='vertical', command=listbox_selected.yview)
+scroll_left.pack(side='right', fill='y')
+listbox_selected.config(yscrollcommand=scroll_left.set)
+
+btns_left = ttk.Frame(left, padding=(0,2))
+btns_left.pack(fill='x', pady=(0,0))
+
+agregar_btn = tk.Button(btns_left, text='Agregar', command=agregar_archivo, bg=BUTTON_COLOR, fg=FG_COLOR, bd=2, relief='raised', font=(FONT_FAMILY, 9), padx=2, pady=2)
+agregar_btn.pack(fill='x', pady=2)
+agregar_btn.bind('<Enter>', on_enter); agregar_btn.bind('<Leave>', on_leave)
+
+generar_btn = tk.Button(btns_left, text='Generar', command=generar_resultado, bg=BUTTON_COLOR, fg=FG_COLOR, bd=2, relief='raised', font=(FONT_FAMILY, 9), padx=2, pady=2)
+generar_btn.pack(fill='x', pady=2)
+generar_btn.bind('<Enter>', on_enter); generar_btn.bind('<Leave>', on_leave)
+
+# Right: acciones
+actions_frame = ttk.LabelFrame(right, text='Acciones', padding=6)
+actions_frame.pack(fill='x')
+
+escanear_arp_button = tk.Button(actions_frame, text='ARP Scan', command=escanear_arp, bg=BUTTON_COLOR, fg=FG_COLOR, bd=2, relief='raised', font=(FONT_FAMILY, 9), padx=2, pady=2)
+escanear_arp_button.pack(fill='x', pady=3)
+escanear_arp_button.bind('<Enter>', on_enter); escanear_arp_button.bind('<Leave>', on_leave)
+
+velocidad_button = tk.Button(actions_frame, text='Velocidad', command=medir_velocidad, bg=BUTTON_COLOR, fg=FG_COLOR, bd=2, relief='raised', font=(FONT_FAMILY, 9), padx=2, pady=2)
+velocidad_button.pack(fill='x', pady=3)
+velocidad_button.bind('<Enter>', on_enter); velocidad_button.bind('<Leave>', on_leave)
+
+mapa_button = tk.Button(actions_frame, text='IP y Mapa', command=obtener_ip_y_abrir_mapa, bg=BUTTON_COLOR, fg=FG_COLOR, bd=2, relief='raised', font=(FONT_FAMILY, 9), padx=2, pady=2)
+mapa_button.pack(fill='x', pady=3)
+mapa_button.bind('<Enter>', on_enter); mapa_button.bind('<Leave>', on_leave)
+
+gps_button = tk.Button(actions_frame, text='GPS Imagen', command=buscar_archivo_y_abrir_mapa, bg=BUTTON_COLOR, fg=FG_COLOR, bd=2, relief='raised', font=(FONT_FAMILY, 9), padx=2, pady=2)
+gps_button.pack(fill='x', pady=3)
+gps_button.bind('<Enter>', on_enter); gps_button.bind('<Leave>', on_leave)
+
+encrypt_button = tk.Button(actions_frame, text='Cifrar', command=encrypt_folder, bg=BUTTON_COLOR, fg=FG_COLOR, bd=2, relief='raised', font=(FONT_FAMILY, 9), padx=2, pady=2)
+encrypt_button.pack(fill='x', pady=3)
+encrypt_button.bind('<Enter>', on_enter); encrypt_button.bind('<Leave>', on_leave)
+
+decrypt_button = tk.Button(actions_frame, text='Descifrar', command=decrypt_folder, bg=BUTTON_COLOR, fg=FG_COLOR, bd=2, relief='raised', font=(FONT_FAMILY, 9), padx=2, pady=2)
+decrypt_button.pack(fill='x', pady=3)
+decrypt_button.bind('<Enter>', on_enter); decrypt_button.bind('<Leave>', on_leave)
+
+# Borrar metadatos en acciones a la derecha (alert style)
+alert_frame = tk.Frame(actions_frame, bg=BUTTON_BORDER_ALERT)
+alert_frame.pack(fill='x', pady=(3,0))
+borrar_metadatos_button = tk.Button(alert_frame, text='Borrar Metadata', command=elegir_y_borrar_metadatos, bg=BUTTON_ALERT_COLOR, fg=FG_COLOR, relief='raised', bd=2, activebackground=BUTTON_ALERT_ACTIVE, font=(FONT_FAMILY, 9, 'bold'), padx=2, pady=2)
+borrar_metadatos_button.pack(fill='both', expand=True, padx=3, pady=3)
+borrar_metadatos_button.bind('<Enter>', on_enter_alert); borrar_metadatos_button.bind('<Leave>', on_leave_alert)
+
+# --- Special Widgets ---
+# Sudo password entry (en la columna derecha dentro de actions_frame)
+contrasena_frame = ttk.Frame(actions_frame)
+contrasena_frame.pack(fill='x', pady=(4,4))
+contrasena_label = ttk.Label(contrasena_frame, text="Sudo:")
+contrasena_label.pack(side="left", padx=(0, 5))
+contrasena_entry = tk.Entry(contrasena_frame, show="*", bg=BUTTON_COLOR, fg=FG_COLOR, font=(FONT_FAMILY, 9), relief="flat", insertbackground=FG_COLOR)
+contrasena_entry.pack(side="left", expand=True, fill="x")
+
+
+# --- Output & Status Area (derecha) ---
+output_frame = ttk.Frame(right, padding="4")
+output_frame.pack(expand=True, fill="both", pady=(3, 0))
+
 archivos_seleccionados = []
 
-# Botones
-style = ttk.Style()
-style.configure('Boton3D.TButton', relief='raised', borderwidth=5, background='black', foreground='green')
+# Small action buttons for selection
+sel_btn_frame = tk.Frame(output_frame, bg=BG_COLOR)
+sel_btn_frame.pack(fill='x', pady=(3,0))
+open_sel_btn = tk.Button(sel_btn_frame, text='Abrir', command=lambda: open_selected_file(), bg=BUTTON_COLOR, fg=FG_COLOR, relief='raised', bd=2, font=(FONT_FAMILY, 9), padx=2, pady=1)
+open_sel_btn.pack(side='left', padx=3)
+open_sel_btn.bind('<Enter>', on_enter); open_sel_btn.bind('<Leave>', on_leave)
+del_sel_btn = tk.Button(sel_btn_frame, text='Eliminar', command=lambda: delete_selected_file(), bg=BUTTON_ALERT_COLOR, fg=FG_COLOR, relief='raised', bd=2, font=(FONT_FAMILY, 9), padx=2, pady=1)
+del_sel_btn.pack(side='left', padx=3)
+del_sel_btn.bind('<Enter>', on_enter_alert); del_sel_btn.bind('<Leave>', on_leave_alert)
 
-# Botón para agregar archivo
-agregar_button = ttk.Button(ventana, text="Agregar Archivo", command=agregar_archivo, style='Boton3D.TButton')
-agregar_button.grid(row=0, column=0, padx=5, pady=5)
+ttk.Label(output_frame, text='Resultados:').pack(anchor='w', pady=(4,2))
+resultado_frame = ttk.Frame(output_frame)
+resultado_frame.pack(fill='both', expand=True, pady=(2,0))
 
-# Botón para generar resultado
-generar_button = ttk.Button(ventana, text="Generar Resultado", command=generar_resultado, style='Boton3D.TButton')
-generar_button.grid(row=1, column=0, padx=5, pady=5)
+resultado_text = tk.Text(resultado_frame, height=10, wrap='word', bg='#050505', fg='#CFEFFD', bd=2, relief='sunken', font=(FONT_FAMILY, 9))
+resultado_text.pack(side='left', fill='both', expand=True)
+resultado_scroll = ttk.Scrollbar(resultado_frame, orient='vertical', command=resultado_text.yview)
+resultado_scroll.pack(side='right', fill='y')
+resultado_text.config(yscrollcommand=resultado_scroll.set, state='disabled')
 
-# Entry para contraseña de sudo
-contrasena_entry = tk.Entry(ventana, show="*", bg='black', fg='green')
-contrasena_entry.grid(row=2, column=0, padx=5, pady=5)
+# Crear estilo personalizado
+style.configure("green.Horizontal.TProgressbar",
+                troughcolor="#333333",  # color de fondo (gris oscuro)
+                background="#76FF03",    # color de la barra llena (verde)
+                thickness=20)            # grosor de la barra (opcional)
+                
+# Asignar estilo a tu progress bar
+progress_bar = ttk.Progressbar(output_frame, orient="horizontal", length=200, mode="indeterminate", style="green.Horizontal.TProgressbar")
+progress_bar.pack_forget()
 
-# Botón para escanear ARP
-escanear_arp_button = ttk.Button(ventana, text="Escanear ARP", command=escanear_arp, style='Boton3D.TButton')
-escanear_arp_button.grid(row=3, column=0, padx=5, pady=5)
+# --- Helpers for selection actions ---
+def open_selected_file():
+    try:
+        sel = listbox_selected.curselection()
+        if not sel:
+            messagebox.showinfo("Seleccionar", "Seleccione un archivo en la lista.")
+            return
+        path = archivos_seleccionados[sel[0]]
+        if path:
+            subprocess.Popen(['xdg-open', path])
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudo abrir el archivo: {e}")
 
-# Botón para medir velocidad de internet
-velocidad_button = ttk.Button(ventana, text="Medir Velocidad de Internet", command=medir_velocidad, style='Boton3D.TButton')
-velocidad_button.grid(row=4, column=0, padx=5, pady=5)
 
-# Botón para obtener IP y abrir mapa
-mapa_button = ttk.Button(ventana, text="Obtener IP y Abrir Mapa", command=obtener_ip_y_abrir_mapa, style='Boton3D.TButton')
-mapa_button.grid(row=5, column=0, padx=5, pady=5)
+def delete_selected_file():
+    try:
+        sel = listbox_selected.curselection()
+        if not sel:
+            messagebox.showinfo("Seleccionar", "Seleccione un archivo para eliminar.")
+            return
+        idx = sel[0]
+        archivos_seleccionados.pop(idx)
+        update_selected_files_label()
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudo eliminar el archivo: {e}")
 
-# Botón para elegir archivo para borrar metadatos
-elegir_archivo_borrar_metadatos_button = ttk.Button(ventana, text="Elegir Archivo para Borrar Metadatos", command=elegir_archivo_borrar_metadatos, style='Boton3D.TButton')
-elegir_archivo_borrar_metadatos_button.grid(row=6, column=0, padx=5, pady=5)
 
-# Botón para borrar metadatos
-borrar_metadatos_button = ttk.Button(ventana, text="Borrar Metadatos", command=lambda: borrar_metadatos(archivos_seleccionados[0]), style='Boton3D.TButton', state="disabled")
-borrar_metadatos_button.grid(row=7, column=0, padx=5, pady=5)
-
-# Botón para cifrar carpeta
-encrypt_folder_button = ttk.Button(ventana, text="Cifrar Carpeta", command=encrypt_folder, style='Boton3D.TButton')
-encrypt_folder_button.grid(row=0, column=1, padx=5, pady=5)
-
-# Botón para descifrar carpeta
-decrypt_button = ttk.Button(ventana, text="Descifrar Carpeta", command=decrypt_folder, style='Boton3D.TButton')
-decrypt_button.grid(row=1, column=1, padx=5, pady=5)
-
-# Botón para buscar archivo y abrir mapa con ubicación GPS
-gps_button = ttk.Button(ventana, text="Buscar Imagen y Abrir Mapa", command=buscar_archivo_y_abrir_mapa, style='Boton3D.TButton')
-gps_button.grid(row=2, column=1, padx=5, pady=5)
-
-# Etiqueta para mostrar archivos seleccionados
-archivos_seleccionados_label = tk.Label(ventana, text="Archivos seleccionados:", bg='black', fg='green')
-archivos_seleccionados_label.grid(row=8, column=0, columnspan=2, padx=5, pady=5)
-
-# Etiqueta para mostrar el resultado
-resultado_label = tk.Label(ventana, text="", bg='black', fg='green')
-resultado_label.grid(row=9, column=0, columnspan=2, padx=5, pady=5)
-
-ventana.configure(bg='black')  # Cambia el color de fondo de la ventana principal
 ventana.mainloop()
+
