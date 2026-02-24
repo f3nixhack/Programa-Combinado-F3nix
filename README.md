@@ -120,3 +120,6 @@ python3 chat.py
 - Si no hay entorno grafico, ambas apps fallan con mensaje por consola.
 - `resultado.txt` se genera en el directorio del proyecto.
 - En cifrado/descifrado se usan archivos temporales y luego se eliminan.
+  
+- ## Aviso
+Este proyecto es para fines educativos. No uses esta herramienta para actividades ilegales.
