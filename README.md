@@ -1,4 +1,6 @@
 # F3NIX Toolkit + OnionChat
+![WhatsApp Image 2026-02-24 at 14 51 06](https://github.com/user-attachments/assets/077605ea-8bd3-4ea3-a768-7d61cad286d6)
+![WhatsApp Image 2026-02-24 at 14 51 06 (1)](https://github.com/user-attachments/assets/abf71280-1fbd-4a5b-8f86-6f1330b2910c)
 
 Este proyecto incluye 2 aplicaciones de escritorio en Python (Tkinter):
 
