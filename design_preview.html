@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Maqueta 3D — Diseño legible</title>
+  <style>
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial,Helvetica,sans-serif;background:#0b1020;color:#e6eef8}
+    #container{width:100%;height:100%;position:relative;overflow:hidden}
+    .label{
+      padding:8px 12px;border-radius:8px;background:rgba(255,255,255,0.95);color:#081226;font-weight:600;box-shadow:0 6px 18px rgba(2,6,23,0.6);font-size:16px;white-space:nowrap
+    }
+    .sub{font-size:13px;font-weight:500;opacity:0.85;margin-top:6px}
+    .hint{position:absolute;left:12px;top:12px;background:transparent;color:#9fb0d6;font-size:13px}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div class="hint">Maqueta 3D — diseño legible. Usa el ratón para orbitar y acercar.</div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'https://unpkg.com/three@0.152.2/examples/jsm/renderers/CSS2DRenderer.js';
+
+    const container = document.getElementById('container');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x0b1020, 0.06);
+
+    const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 200);
+    camera.position.set(0, 6, 16);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    container.appendChild(labelRenderer.domElement);
+
+    const controls = new OrbitControls(camera, labelRenderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 6;
+    controls.maxDistance = 40;
+
+    // Lighting
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.9);
+    hemi.position.set(0, 20, 0);
+    scene.add(hemi);
+
+    const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+    dir.position.set(5, 10, 7);
+    dir.castShadow = false;
+    scene.add(dir);
+
+    // Ground subtle plane
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x071326, roughness: 0.9, metalness: 0.0 });
+    const groundGeo = new THREE.PlaneGeometry(200, 200);
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -2.2;
+    scene.add(ground);
+
+    // Create 3D cards (simple rounded look with bevel effect simulated)
+    const cardGeom = new THREE.BoxGeometry(6, 3.5, 0.3);
+    const cardMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.05 });
+
+    const positions = [ [-7,1.4,0], [0,0.6,-1.2], [7,0.1,0] ];
+    const titles = [ 'Título Claro', 'Información Principal', 'Resumen' ];
+    const subs = [ 'Legible y contrastado', 'Contenido importante destacado', 'Dato breve y claro' ];
+
+    for (let i = 0; i < 3; i++) {
+      const mesh = new THREE.Mesh(cardGeom, cardMat.clone());
+      mesh.position.set(...positions[i]);
+      mesh.rotation.y = (i === 1) ? -0.08 : (i === 2 ? 0.06 : 0.12);
+      mesh.scale.set(1,1,1);
+      scene.add(mesh);
+
+      // label DOM element for crisp readable text
+      const div = document.createElement('div');
+      div.className = 'label';
+      div.innerHTML = `<div style="font-size:18px;font-weight:700">${titles[i]}</div><div class="sub">${subs[i]}</div>`;
+      const label = new CSS2DObject(div);
+      label.position.set(0, 0.3, 0.2);
+      mesh.add(label);
+    }
+
+    // Accent floating element for depth
+    const accentGeo = new THREE.TorusGeometry(2.8, 0.08, 16, 90);
+    const accentMat = new THREE.MeshStandardMaterial({ color: 0x3fb0ff, emissive: 0x0b2a3a, roughness: 0.5 });
+    const torus = new THREE.Mesh(accentGeo, accentMat);
+    torus.position.set(0, 3.6, -1.5);
+    torus.rotation.x = Math.PI / 2.8;
+    scene.add(torus);
+
+    // Subtle animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      torus.rotation.z += 0.0025;
+      torus.rotation.x += 0.0015;
+      controls.update();
+      renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
+    }
+
+    animate();
+
+    window.addEventListener('resize', ()=>{
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
